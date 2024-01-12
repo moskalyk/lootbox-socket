@@ -99,6 +99,45 @@ io.use(async (socket, next) => {
       }
 })
 
+function toSnakeCase(str: any) {
+  return str.toLowerCase().replace(/\s+/g, '_');
+}
+
+function formatStatString(str: any, main = true) {
+  if(str == null ) return []
+  const regex = /^(.*?)\s*([+-]?\d+)(-)?(\d+)?(%?)$/;
+  const matches = str.match(regex);
+  let formattedResult = [];
+
+  if (matches) {
+      let [_, stat_name, firstValue, rangeIndicator, secondValue, percentageSymbol] = matches;
+      const baseDisplayType = toSnakeCase(stat_name);
+      const isPercentage = percentageSymbol === '%';
+
+      if (rangeIndicator === '-') {
+          formattedResult.push({
+              "display_type": main ? baseDisplayType + "_min" : "sub_stats_"+baseDisplayType + "_min", 
+              "trait_type": stat_name + " Minimum", 
+              "value": parseInt(firstValue, 10) + (isPercentage ? '%' : '')
+          });
+
+          formattedResult.push({
+              "display_type": main ? baseDisplayType + "_max" : "sub_stats_"+baseDisplayType + "_max", 
+              "trait_type": stat_name + " Maximum", 
+              "value": parseInt(firstValue, 10) + (isPercentage ? '%' : '')
+          });
+      } else {
+          formattedResult.push({
+              "display_type": main ? baseDisplayType : "sub_stats_"+baseDisplayType, 
+              "trait_type": stat_name, 
+              "value": parseInt(firstValue, 10) + (isPercentage ? '%' : '')
+          });
+      }
+  } 
+
+  return formattedResult;
+}
+
 function getCurrentSecond() {
   // Create a new Date object representing the current time
   const now = new Date()
@@ -110,9 +149,10 @@ function getCurrentSecond() {
 const inferencePool: any = {};
 
 io.on('connection', (socket: any) => {
+  console.log(socket.id)
     if(loggedIn[socket.id]) {
         loggedIn[socket.id] = {address: loggedIn[socket.id].address, socket: socket }
-
+        // console.log(loggedIn[socket.id])
         socket.on('disconnect', () => {
             console.log('Client disconnected')
             delete loggedIn[socket.id]
@@ -120,11 +160,52 @@ io.on('connection', (socket: any) => {
 
         socket.on('collect', async (data: any) => {
 
-            // console.log('Received response:', data);
-            const { inferenceId, seconds, prompt }: any = await getInference(getCurrentSecond())
-            inferencePool[inferenceId] = {address: data.address, seconds: getCurrentSecond(), prompt: prompt }
-          // const prompt = 'test'
-          // inferencePool['LMQs1yiUTQmxhnTlBTfLrw'] = {address: data.address, seconds: getCurrentSecond(), prompt: prompt }
+            console.log('Received response:', data);
+            // const { inferenceId, seconds, prompt }: any = await getInference(getCurrentSecond())
+            const res = await axios('http://127.0.0.1:5000')
+            console.log(res.data)
+
+          const attributes = []
+
+          const defend = Math.random() > 0.5 ? true : false
+
+            // category
+            attributes.push({
+              display_type: "category",
+              trait_type: "Category",
+              value: res.data[defend ? 'armor' : 'weapon'].category
+            })
+
+            // main stats
+            attributes.push(...formatStatString(res.data[defend ? 'armor' : 'weapon'].main_stats[0], true))
+
+            // sub stats
+            const sub_stats = res.data[defend ? 'armor' : 'weapon'].stats
+
+            // tier
+            sub_stats.map((stats: any) => {
+              attributes.push(...formatStatString(stats, false))
+            })
+
+            // type
+            attributes.push({
+              display_type: "tier",
+              trait_type: "tier",
+              value: res.data[defend ? 'armor' : 'weapon'].tier
+            })
+
+            attributes.push({
+              display_type: "type",
+              trait_type: "type",
+              value: res.data[defend ? 'armor' : 'weapon'].type
+            })
+
+            console.log(attributes)
+            const { inferenceId, seconds, prompt }: any = await getInferenceWithItem(res.data[defend ? 'armor' : 'weapon'].name)
+            inferencePool[inferenceId] = {address: data.address, seconds: getCurrentSecond(), prompt: res.data.armor.name, data: res.data.armor, attributes: attributes }
+
+            // const prompt = 'test'
+          // inferencePool['LMQs1yiUTQmxhnTlBTfLrw'] = {address: data.address, seconds: getCurrentSecond(), prompt: res.data.armor.name, data: res.data.armor }
         })
     }
 })
@@ -142,6 +223,18 @@ async function getInference(seconds: any) {
       }
     }, {modelId: modelId})
     res({inferenceId: data.inference.id, prompt: prompts[seconds], seconds })
+  })
+}
+
+async function getInferenceWithItem(prompt: any) {
+  return new Promise( async (res) => {
+    const { data } = await sdk.postModelsInferencesByModelId({
+      parameters: {
+        type: 'txt2img',
+        prompt: prompt + ' single object on black background no people'
+      }
+    }, {modelId: modelId})
+    res({inferenceId: data.inference.id, prompt: prompt, seconds: getCurrentSecond() })
   })
 }
 
@@ -175,7 +268,7 @@ async function processInferencePool() {
       const promises = entries.map(([id,obj]: any) => 
           getInferenceStatus(id, obj.address, obj.seconds, obj.prompt).then(async ({ status, url, address, seconds, prompt } : any) => {
               if (status == 'succeeded') {
-                  delete inferencePool[id]
+                  // delete inferencePool[id]
 
                   // TODO: do cleanup of this logic with objects                 
                   prompts.push(prompt)
@@ -197,19 +290,19 @@ async function processInferencePool() {
         const contract = new ethers.Contract(contractAddress, abi, provider);
         let totalSupply
 
-        try {
-            // Call the totalSupply function
-            totalSupply = await contract.totalSupply();
-            console.log(`Total Supply: ${totalSupply.toString()}`);
-        } catch (error) {
-            console.error(`Error in fetching total supply: ${error}`);
-        }
+        // try {
+        //     // Call the totalSupply function
+        //     totalSupply = await contract.totalSupply();
+        //     console.log(`Total Supply: ${totalSupply.toString()}`);
+        // } catch (error) {
+        //     console.error(`Error in fetching total supply: ${error}`);
+        // }
 
 
         // Process URLs after all getInferenceStatus calls are done
-        const MetadataPromises = urls.map((url: any, i: any) => upload(url, times[i], prompts[i]))
+        const MetadataPromises = urls.map((url: any, i: any) => upload(url, times[i], prompts[i], ))
         const metadatas = await Promise.all(MetadataPromises);
-        const finalCID = await uploadDirectory(totalSupply, metadatas)
+        // const finalCID = await uploadDirectory(totalSupply, metadatas)
         const ids = Object.keys(loggedIn)
 
         let mintTxs = []
@@ -248,32 +341,40 @@ async function processInferencePool() {
 
         let txnResponse: any;
         try{
-          txnResponse = await signer.sendTransaction([...mintTxs])
-          console.log(txnResponse)
+          // txnResponse = await signer.sendTransaction([...mintTxs])
+          // console.log(txnResponse)
         }catch(err) {
           console.log(err)
         } 
 
-        for (let i = totalSupply+1; i <= totalSupply + listOfAddresses.length; i++) {
-          const res = await fetch(`https://metadata.sequence.app/tokens/bsc-testnet/${contractAddress}/${i}/refresh`)
-          console.log(res)
-        }
+        // for (let i = totalSupply+1; i <= totalSupply + listOfAddresses.length; i++) {
+        //   const res = await fetch(`https://metadata.sequence.app/tokens/bsc-testnet/${contractAddress}/${i}/refresh`)
+        //   console.log(res)
+        // }
 
         for(let i = 0; i < ids.length; i++){
           const socket = loggedIn[ids[i]]
+          // console.log(socket)
           for(let j = 0; j < listOfAddresses.length; j++){
             // TODO: do more to cleanup lists
             // if addressess align with sockets, remove and emit
-            if(listOfAddresses[j] == socket.address){
+            if(listOfAddresses[j] == socket.address && socket.socket) {
               const index = listOfAddresses.indexOf(socket.address);
               if (index > -1) { // only splice array when item is found
                 listOfAddresses.splice(index, 1) // 2nd parameter means remove one item only
               }
-              console.log('testing')
-              console.log(finalCID)
-              console.log(socket.socket.id)
+              // console.log(finalCID)
+              // console.log(socket.socket.id)
+              const entries: any = Object.entries(inferencePool)
+              // console.log(entries)
+              // console.log(entries[0][1].data)
+              
+              delete inferencePool[entries[0][0]]
 
-              socket.socket.emit(`loot`, txnResponse.hash)
+              entries[0][1].data.url = metadatas[0].image
+              
+              // socket.socket.emit(`loot`, txnResponse.hash)
+              socket.socket.emit(`loot`, entries[0])
               break
             }
           }
@@ -374,7 +475,7 @@ async function uploadToIPFS(url: any, pinata: any, seconds: any, prompt: any) {
                 sourceGeneration: 'scenario.gg',
                 time: seconds,
                 prompt: prompt,
-                aesthetic: JSON.stringify(['retrocandy','compute','single-object','no people'])
+                aesthetic: JSON.stringify(['medieval','compute','single-object','no people'])
             }
         },
         pinataOptions: {
@@ -397,8 +498,9 @@ async function uploadToIPFS(url: any, pinata: any, seconds: any, prompt: any) {
       image: `https://${cidV1Base32}.ipfs.nftstorage.link`
     }
 
-    await core.append(metadata)
+    // await core.append(metadata)
 
+    return metadata
   } catch (error) {
       console.error('Error uploading file to IPFS:', error)
       throw error
