@@ -23,10 +23,10 @@ import CID from 'cids'
 //@ts-ignore
 import Hypercore from 'hypercore'
 
-// Create a Hypercore instance for the Hyperbee
-const core = new Hypercore(`./hypercore-storage`, {
-    valueEncoding: 'json'
-})
+// // Create a Hypercore instance for the Hyperbee
+// const core = new Hypercore(`./hypercore-storage`, {
+//     valueEncoding: 'json'
+// })
 
 const sdk = api('@scenario-api/v1.0#fydhn73iklq3ujnso')
 const pinataSDK = require('@pinata/sdk')
@@ -39,23 +39,23 @@ const app = express()
 const CLIENT_URL = process.env.client_url
 const modelId = process.env.model_id
 
-app.get('/metadata/:token_id', async (req, res) => {
-  try {
-    const timeout = new Promise((resolve, reject) => {
-        setTimeout(() => reject(new Error('Timeout')), 400);
-    });
+// app.get('/metadata/:token_id', async (req, res) => {
+//   try {
+//     const timeout = new Promise((resolve, reject) => {
+//         setTimeout(() => reject(new Error('Timeout')), 400);
+//     });
 
-    const block = await Promise.race([
-        core.get(req.params.token_id),
-        timeout
-    ]);
+//     const block = await Promise.race([
+//         core.get(req.params.token_id),
+//         timeout
+//     ]);
 
-    res.send(block);
-  } catch (error) {
-      console.error(error);
-      res.sendStatus(400);
-  }
-})
+//     res.send(block);
+//   } catch (error) {
+//       console.error(error);
+//       res.sendStatus(400);
+//   }
+// })
 
 const httpServer = createServer(app)
 const io = new socketIoServer(httpServer, {
@@ -71,7 +71,7 @@ const corsOptions = {
 app.use(cors(corsOptions))
 
 const loggedIn: any = {}
-const rpcUrl = 'https://nodes.sequence.app/bsc'
+const rpcUrl = 'https://nodes.sequence.app/arbitrum-nova'
 const provider = new ethers.providers.JsonRpcProvider(rpcUrl)
 const contractAddress = '0xc8a3e4268e9fccaeedb26c0fb22e7653c76d2771'
 
@@ -86,21 +86,35 @@ const ethauth = new ETHAuth(validator)
 
 io.use(async (socket, next) => {
     const token = socket.handshake.query.token as string
-    const address = socket.handshake.query.address as string;
+    // console.log(token)
+    // const address = socket.handshake.query.address as string;
     await ethauth.configJsonRpcProvider(rpcUrl)
     try {
         const proof = await ethauth.decodeProof(token)
-        loggedIn[socket.id] = {address: address, socket: null }
+        // only allow for 1 socket
+        const sockets: any = Object.entries(loggedIn)
+        for(let i = 0; i < sockets.length; i++){
+          console.log(sockets[i])
+          // }
+          if(sockets[i][1].hasOwnProperty('address') && sockets[i][1].address == proof.address){
+            next(new Error('Duplicate Socket'))
+          } 
+        }
+        loggedIn[socket.id] = {address: proof.address, socket: null }
         console.log(`proof for address ${proof.address} is valid`)
         next()
-      } catch (err) {
-        console.log(`invalid proof -- do not trust address: ${err}`)
-        next(new Error('Authentication error'))
-      }
+    } catch (err) {
+      console.log(`invalid proof -- do not trust address: ${err}`)
+      next(new Error('Authentication error'))
+    }
 })
 
 function toSnakeCase(str: any) {
   return str.toLowerCase().replace(/\s+/g, '_');
+}
+
+function removeCharacter(str: any, charToRemove: any) {
+  return str.replace(new RegExp(charToRemove, 'g'), '');
 }
 
 function formatStatString(str: any, main = true) {
@@ -111,6 +125,7 @@ function formatStatString(str: any, main = true) {
 
   if (matches) {
       let [_, stat_name, firstValue, rangeIndicator, secondValue, percentageSymbol] = matches;
+      stat_name = removeCharacter(stat_name, ':')
       const baseDisplayType = toSnakeCase(stat_name);
       const isPercentage = percentageSymbol === '%';
 
@@ -124,7 +139,7 @@ function formatStatString(str: any, main = true) {
           formattedResult.push({
               "display_type": main ? baseDisplayType + "_max" : "sub_stats_"+baseDisplayType + "_max", 
               "trait_type": stat_name + " Maximum", 
-              "value": parseInt(firstValue, 10) + (isPercentage ? '%' : '')
+              "value": parseInt(secondValue, 10) + (isPercentage ? '%' : '')
           });
       } else {
           formattedResult.push({
@@ -147,15 +162,39 @@ function getCurrentSecond() {
 }
 
 const inferencePool: any = {};
+const mintPool: any = {};
 
 io.on('connection', (socket: any) => {
   console.log(socket.id)
-    if(loggedIn[socket.id]) {
+  console.log(loggedIn[socket.id].socket)
+  console.log(loggedIn[socket.id] && loggedIn[socket.id].socket == null)
+    if(loggedIn[socket.id]) { // check for duplicate sockets
         loggedIn[socket.id] = {address: loggedIn[socket.id].address, socket: socket }
         // console.log(loggedIn[socket.id])
         socket.on('disconnect', () => {
             console.log('Client disconnected')
             delete loggedIn[socket.id]
+        })
+
+        socket.on('cancel', async (data: any) => {
+          console.log(data.address)
+          const entries: any = Object.entries(inferencePool)
+
+          for(let i = 0; i < entries.length; i++){
+            console.log(entries[i])
+            if(entries[i][1].address.toLowerCase() == data.address.toLowerCase()){
+              delete inferencePool[entries[i][0]]
+            }
+          }
+        })
+
+        socket.on('mint', async (data: any) => {
+          console.log(data.address)
+          mintPool[data.address] = true
+        })
+
+        socket.on('ping', async (data: any, callback: any) => {
+          callback({status: 'ok'})
         })
 
         socket.on('collect', async (data: any) => {
@@ -202,29 +241,14 @@ io.on('connection', (socket: any) => {
 
             console.log(attributes)
             const { inferenceId, seconds, prompt }: any = await getInferenceWithItem(res.data[defend ? 'armor' : 'weapon'].name)
-            inferencePool[inferenceId] = {address: data.address, seconds: getCurrentSecond(), prompt: res.data.armor.name, data: res.data.armor, attributes: attributes }
+
+            inferencePool[inferenceId] = {address: data.address, seconds: getCurrentSecond(), prompt: res.data.armor.name, data: res.data.armor, attributes: attributes, awaitingMint: false }
 
             // const prompt = 'test'
-          // inferencePool['LMQs1yiUTQmxhnTlBTfLrw'] = {address: data.address, seconds: getCurrentSecond(), prompt: res.data.armor.name, data: res.data.armor }
+            // inferencePool['ePOM3iFUy6pqFAKlAAAD'] = {address: data.address, seconds: getCurrentSecond(), prompt: res.data[defend ? 'armor' : 'weapon'].name, data: res.data[defend ? 'armor' : 'weapon'] }
         })
-    }
+    } 
 })
-
-httpServer.listen(3000, () => {
-    console.log('Listening on port 3000');
-})
-
-async function getInference(seconds: any) {
-  return new Promise( async (res) => {
-    const { data } = await sdk.postModelsInferencesByModelId({
-      parameters: {
-        type: 'txt2img',
-        prompt: prompts[seconds] + ' single object on white background no people'
-      }
-    }, {modelId: modelId})
-    res({inferenceId: data.inference.id, prompt: prompts[seconds], seconds })
-  })
-}
 
 async function getInferenceWithItem(prompt: any) {
   return new Promise( async (res) => {
@@ -256,6 +280,99 @@ function isValidKey(data: any) {
 
 const wait = async (ms: any) => new Promise((res) => setTimeout(res, ms))
 
+async function processMintPool() {
+  while (true) {
+    await wait(1000 * 4); // check for status every 10 seconds
+
+    const mints = Object.entries(mintPool)
+    const entries: any = Object.entries(inferencePool)
+
+    if(mints.length > 0){
+      const directory = []
+      for (let i = 0; i < mints.length; i++){
+
+        // get token supply
+        // const provider = new ethers.providers.JsonRpcProvider('https://nodes.sequence.app/bsc-testnet');
+        // const contract = new ethers.Contract(contractAddress, abi, provider);
+        // let totalSupply
+        // try {
+        //     // Call the totalSupply function
+        //     totalSupply = await contract.totalSupply();
+        //     console.log(`Total Supply: ${totalSupply.toString()}`);
+        // } catch (error) {
+        //     console.error(`Error in fetching total supply: ${error}`);
+        // }
+
+        for (let j = 0; j < entries.length; j++){
+          if(mints[i][0] == entries[j][1].address){
+            delete inferencePool[entries[j][0]]
+            delete mintPool[entries[j][1].address]
+            const metadata = {
+              name: 'Lootbox: ' + entries[j][1].data.name,
+              description: 'A free lootbox mini-game available for use in any game that requires collectible rewards',
+              image: entries[j][1].data.url,
+              attributes: entries[j][1].attributes
+            }
+            // add to array
+            directory.push(metadata)
+          }
+        }
+
+        let mintTxs = []
+
+        // // Create your server EOA
+        // const walletEOA = new ethers.Wallet(String(process.env.PKEY), provider);
+
+        // // Open a Sequence session, this will find or create
+        // // a Sequence wallet controlled by your server EOA
+        // const session = await Session.singleSigner({
+        //     signer: walletEOA
+        // })
+
+        // const signer = session.account.getSigner(97)
+        // console.log(signer.account.address)
+
+        // for(let j = 0; j < listOfAddresses.length; j++){
+
+        //   // // Craft your transaction
+        //   const erc721Interface = new ethers.utils.Interface([
+        //     'function collect(address address_)'
+        //   ])
+
+        //   const data = erc721Interface.encodeFunctionData(
+        //     'collect', [listOfAddresses[j]]
+        //   )
+
+        //   const txn = {
+        //     to: contractAddress,
+        //     data
+        //   }
+
+        //   // Send the transaction
+        //   mintTxs.push(txn)
+        // }
+
+        // let txnResponse: any;
+        // try{
+        //   // txnResponse = await signer.sendTransaction([...mintTxs])
+        //   // console.log(txnResponse)
+        // }catch(err) {
+        //   console.log(err)
+        // } 
+
+        // // for (let i = totalSupply+1; i <= totalSupply + listOfAddresses.length; i++) {
+        // //   const res = await fetch(`https://metadata.sequence.app/tokens/bsc-testnet/${contractAddress}/${i}/refresh`)
+        // //   console.log(res)
+        // // }
+        // //
+        // // upload directory
+        // const finalCID = await uploadDirectory(totalSupply, directory)
+        console.log(directory)
+      }
+    }
+  }
+}
+
 async function processInferencePool() {
   while (true) {
       await wait(1000 * 10); // check for status every 10 seconds
@@ -265,116 +382,57 @@ async function processInferencePool() {
       let times: any = []
       let prompts: any = []
 
-      const promises = entries.map(([id,obj]: any) => 
-          getInferenceStatus(id, obj.address, obj.seconds, obj.prompt).then(async ({ status, url, address, seconds, prompt } : any) => {
+      const promises = entries.map(([id,obj]: any) =>{
+        if(obj.awaitingMint == false){
+            return getInferenceStatus(id, obj.address, obj.seconds, obj.prompt).then(async ({ status, url, address, seconds, prompt } : any) => {
+              console.log(status)  
               if (status == 'succeeded') {
-                  // delete inferencePool[id]
-
-                  // TODO: do cleanup of this logic with objects                 
-                  prompts.push(prompt)
-                  urls.push(url)
-                  times.push(seconds)
-                  listOfAddresses.push(address)
-              } else {
-                console.log(status)
-              }
-          })
+                    // TODO: do cleanup of this logic with objects                 
+                    prompts.push(prompt)
+                    urls.push(url)
+                    times.push(seconds)
+                    listOfAddresses.push(address)
+                } else {
+                  console.log('status else')
+                  console.log(status)
+                }
+            })
+          }
+        }
       );
 
       await Promise.all(promises)
 
       if(urls.length > 0){
-
-        const provider = new ethers.providers.JsonRpcProvider('https://nodes.sequence.app/bsc-testnet');
-
-        const contract = new ethers.Contract(contractAddress, abi, provider);
-        let totalSupply
-
-        // try {
-        //     // Call the totalSupply function
-        //     totalSupply = await contract.totalSupply();
-        //     console.log(`Total Supply: ${totalSupply.toString()}`);
-        // } catch (error) {
-        //     console.error(`Error in fetching total supply: ${error}`);
-        // }
-
-
         // Process URLs after all getInferenceStatus calls are done
-        const MetadataPromises = urls.map((url: any, i: any) => upload(url, times[i], prompts[i], ))
+        const MetadataPromises = urls.map((url: any, i: any) => upload(url, times[i], prompts[i]))
         const metadatas = await Promise.all(MetadataPromises);
-        // const finalCID = await uploadDirectory(totalSupply, metadatas)
+
+        
         const ids = Object.keys(loggedIn)
-
-        let mintTxs = []
-
-        // Create your server EOA
-        const walletEOA = new ethers.Wallet(String(process.env.PKEY), provider);
-
-        // Open a Sequence session, this will find or create
-        // a Sequence wallet controlled by your server EOA
-        const session = await Session.singleSigner({
-            signer: walletEOA
-        })
-
-        const signer = session.account.getSigner(97)
-        console.log(signer.account.address)
-
-        for(let j = 0; j < listOfAddresses.length; j++){
-
-          // // Craft your transaction
-          const erc721Interface = new ethers.utils.Interface([
-            'function collect(address address_)'
-          ])
-
-          const data = erc721Interface.encodeFunctionData(
-            'collect', [listOfAddresses[j]]
-          )
-
-          const txn = {
-            to: contractAddress,
-            data
-          }
-
-          // Send the transaction
-          mintTxs.push(txn)
-        }
-
-        let txnResponse: any;
-        try{
-          // txnResponse = await signer.sendTransaction([...mintTxs])
-          // console.log(txnResponse)
-        }catch(err) {
-          console.log(err)
-        } 
-
-        // for (let i = totalSupply+1; i <= totalSupply + listOfAddresses.length; i++) {
-        //   const res = await fetch(`https://metadata.sequence.app/tokens/bsc-testnet/${contractAddress}/${i}/refresh`)
-        //   console.log(res)
-        // }
 
         for(let i = 0; i < ids.length; i++){
           const socket = loggedIn[ids[i]]
-          // console.log(socket)
+          
           for(let j = 0; j < listOfAddresses.length; j++){
             // TODO: do more to cleanup lists
             // if addressess align with sockets, remove and emit
-            if(listOfAddresses[j] == socket.address && socket.socket) {
+
+            if(listOfAddresses[j].toLowerCase() == socket.address.toLowerCase() && socket.socket) {
               const index = listOfAddresses.indexOf(socket.address);
               if (index > -1) { // only splice array when item is found
                 listOfAddresses.splice(index, 1) // 2nd parameter means remove one item only
               }
-              // console.log(finalCID)
-              // console.log(socket.socket.id)
               const entries: any = Object.entries(inferencePool)
-              // console.log(entries)
-              // console.log(entries[0][1].data)
-              
-              delete inferencePool[entries[0][0]]
+              const filteredEntries = entries.filter((entry: any) => !entry[1].awaitingMint);
 
-              entries[0][1].data.url = metadatas[0].image
-              
-              // socket.socket.emit(`loot`, txnResponse.hash)
-              socket.socket.emit(`loot`, entries[0])
+              for(let k = 0; k < filteredEntries.length; k++){
+                if(filteredEntries[k][1].address.toLowerCase() == socket.address.toLowerCase()){
+                  filteredEntries[k][1].data.url = metadatas[k].image
+                  inferencePool[filteredEntries[k][0]].awaitingMint = true
+                  socket.socket.emit(`loot`, filteredEntries[k])
+                }
+              }
               break
             }
           }
@@ -390,8 +448,10 @@ async function uploadDirectory(totalSupply: number, metadatas: any) {
   const folder = 'loot'
   const files = []
 
-  for(let i = totalSupply+1; i <= totalSupply+metadatas.length; i++){
-    files.push(new File([JSON.stringify(metadatas[i], null, 2)], i+'.json', { type: 'application/json' }))
+  for(let i = Number(totalSupply)+1; i <= Number(totalSupply)+metadatas.length; i++){
+    console.log('i: ', i)
+    console.log(metadatas[i-Number(totalSupply) - 1])
+    files.push(new File([JSON.stringify(metadatas[i-Number(totalSupply)-1], null, 2)], i+'.json', { type: 'application/json' }))
   }
 
   const data = new FormData();
@@ -498,8 +558,6 @@ async function uploadToIPFS(url: any, pinata: any, seconds: any, prompt: any) {
       image: `https://${cidV1Base32}.ipfs.nftstorage.link`
     }
 
-    // await core.append(metadata)
-
     return metadata
   } catch (error) {
       console.error('Error uploading file to IPFS:', error)
@@ -507,4 +565,8 @@ async function uploadToIPFS(url: any, pinata: any, seconds: any, prompt: any) {
   }
 }
 
-processInferencePool()
+httpServer.listen(3000, () => {
+  processInferencePool()
+  processMintPool()
+  console.log('Listening on port 3000');
+})
