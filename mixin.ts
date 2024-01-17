@@ -474,7 +474,6 @@ const SocketMintPool = (base: any) => {
                       socket.on('collect', async (data: any) => {
               
                           console.log('Received response:', data);
-                          // const { inferenceId, seconds, prompt }: any = await getInference(getCurrentSecond())
                           const res = await axios('http://127.0.0.1:5000')
                           console.log(res.data)
               
@@ -517,9 +516,6 @@ const SocketMintPool = (base: any) => {
                           const { inferenceId, seconds, prompt }: any = await base.getInferenceWithItem(res.data[defend ? 'armor' : 'weapon'].name)
               
                           base.inferencePool[inferenceId] = {address: data.address, seconds: base.getCurrentSecond(), prompt: res.data.armor.name, data: res.data.armor, attributes: attributes, awaitingMint: false }
-              
-                          // const prompt = 'test'
-                          // inferencePool['ePOM3iFUy6pqFAKlAAAD'] = {address: data.address, seconds: getCurrentSecond(), prompt: res.data[defend ? 'armor' : 'weapon'].name, data: res.data[defend ? 'armor' : 'weapon'] }
                       })
                   } 
               })
@@ -527,7 +523,6 @@ const SocketMintPool = (base: any) => {
     }
 }
 
-// Server
 (() => {
     let PORT = 3000
     let lootbox = SocketMintPool(//  ☼
