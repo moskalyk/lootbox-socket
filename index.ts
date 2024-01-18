@@ -178,10 +178,9 @@ io.on('connection', (socket: any) => {
 
         socket.on('cancel', async (data: any) => {
           console.log(data.address)
-          const entries: any = Object.entries(inferencePool)
+          const entries: any = Object.keys(inferencePool)
 
           for(let i = 0; i < entries.length; i++){
-            console.log(entries[i])
             if(entries[i][1].address.toLowerCase() == data.address.toLowerCase()){
               delete inferencePool[entries[i][0]]
             }
@@ -404,6 +403,7 @@ async function processInferencePool() {
       await Promise.all(promises)
 
       if(urls.length > 0){
+        console.log(urls)
         // Process URLs after all getInferenceStatus calls are done
         const MetadataPromises = urls.map((url: any, i: any) => upload(url, times[i], prompts[i]))
         const metadatas = await Promise.all(MetadataPromises);
@@ -415,20 +415,29 @@ async function processInferencePool() {
           const socket = loggedIn[ids[i]]
           
           for(let j = 0; j < listOfAddresses.length; j++){
+            console.log('lst of addresses')
             // TODO: do more to cleanup lists
             // if addressess align with sockets, remove and emit
-
+            console.log(listOfAddresses[j])
+            console.log(listOfAddresses[j].toLowerCase() == socket.address.toLowerCase())
+            console.log(socket)
             if(listOfAddresses[j].toLowerCase() == socket.address.toLowerCase() && socket.socket) {
+
               const index = listOfAddresses.indexOf(socket.address);
               if (index > -1) { // only splice array when item is found
                 listOfAddresses.splice(index, 1) // 2nd parameter means remove one item only
               }
               const entries: any = Object.entries(inferencePool)
+              console.log('in here')
               const filteredEntries = entries.filter((entry: any) => !entry[1].awaitingMint);
 
               for(let k = 0; k < filteredEntries.length; k++){
+                console.log('filtered entries')
+
+                console.log(filteredEntries)
                 if(filteredEntries[k][1].address.toLowerCase() == socket.address.toLowerCase()){
                   filteredEntries[k][1].data.url = metadatas[k].image
+                  console.log(filteredEntries[k])
                   inferencePool[filteredEntries[k][0]].awaitingMint = true
                   socket.socket.emit(`loot`, filteredEntries[k])
                 }

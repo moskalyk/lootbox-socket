@@ -306,22 +306,90 @@ const provider = new ethers.providers.JsonRpcProvider(rpcUrl)
 const contractAddress = '0xc8a3e4268e9fccaeedb26c0fb22e7653c76d2771'
 
 
-const SocketMintPool = (base: any) => {
+const SocketProcessInferencePool = (base: any) => {
     base.loggedIn = {}
     base.io = new socketIoServer(base.httpServer, {
         cors: {
           origin: CLIENT_URL
         }
       })
-    base.validator = () =>  ValidateSequenceWalletProof(
+    base.validator = ValidateSequenceWalletProof(
         () => new commons.reader.OnChainReader(provider),
         new trackers.remote.RemoteConfigTracker('https://sessions.sequence.app'),
         v2.DeployedWalletContext
     )
     base.ethauth = new ETHAuth(base.validator)
     base.mintPool = {}
+    base.inferencePool = {}
     return {
         ...base,
+        processInferencePool: async () => {
+            while (true) {
+                await base.wait(1000 * 10); // check for status every 10 seconds
+                const entries = Object.entries(base.inferencePool)
+                let urls: any = []
+                let listOfAddresses: any = []
+                let times: any = []
+                let prompts: any = []
+          
+                const promises = entries.map(([id,obj]: any) =>{
+                  if(obj.awaitingMint == false){
+                      return base.getInferenceStatus(id, obj.address, obj.seconds, obj.prompt).then(async ({ status, url, address, seconds, prompt } : any) => {
+                        console.log(status)  
+                        if (status == 'succeeded') {
+                              // TODO: do cleanup of this logic with objects                 
+                              prompts.push(prompt)
+                              urls.push(url)
+                              times.push(seconds)
+                              listOfAddresses.push(address)
+                          } else {
+                            console.log('status else')
+                            console.log(status)
+                          }
+                      })
+                    }
+                  }
+                );
+          
+                await Promise.all(promises)
+          
+                if(urls.length > 0){
+                  // Process URLs after all getInferenceStatus calls are done
+                  const MetadataPromises = urls.map((url: any, i: any) => base.upload(url, times[i], prompts[i]))
+                  const metadatas = await Promise.all(MetadataPromises);
+          
+                  
+                  const ids = Object.keys(base.loggedIn)
+          
+                  for(let i = 0; i < ids.length; i++){
+                    const socket = base.loggedIn[ids[i]]
+                    
+                    for(let j = 0; j < listOfAddresses.length; j++){
+                      // TODO: do more to cleanup lists
+                      // if addressess align with sockets, remove and emit
+          
+                      if(listOfAddresses[j].toLowerCase() == socket.address.toLowerCase() && socket.socket) {
+                        const index = listOfAddresses.indexOf(socket.address);
+                        if (index > -1) { // only splice array when item is found
+                          listOfAddresses.splice(index, 1) // 2nd parameter means remove one item only
+                        }
+                        const entries: any = Object.entries(base.inferencePool)
+                        const filteredEntries = entries.filter((entry: any) => !entry[1].awaitingMint);
+          
+                        for(let k = 0; k < filteredEntries.length; k++){
+                          if(filteredEntries[k][1].address.toLowerCase() == socket.address.toLowerCase()){
+                            filteredEntries[k][1].data.url = metadatas[k].image
+                            base.inferencePool[filteredEntries[k][0]].awaitingMint = true
+                            socket.socket.emit(`loot`, filteredEntries[k])
+                          }
+                        }
+                        break
+                      }
+                    }
+                  }
+                }
+            }
+        },
         processMintPool: async () => {
             while (true) {
               await base.wait(1000 * 4); // check for status every 10 seconds
@@ -525,22 +593,23 @@ const SocketMintPool = (base: any) => {
 
 (() => {
     let PORT = 3000
-    let lootbox = SocketMintPool(//  ☼
-        ProcessInferencePool(
+    let lootbox = SocketProcessInferencePool(//  ☼
             Inference(
                 Server(
                     Time(
                         Strings(
-                            Upload({
-                                    //  ★
-                                }
+                            Upload(
+                                Stream({
+                                        //  ★
+                                    }
+                                )
                             )
                         )
                     )
                 )
             )
         )
-    )
+    
 
     lootbox.initETHAuthProof()
     lootbox.boot()
