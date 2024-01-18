@@ -470,13 +470,6 @@ const SocketProcessInferencePool = (base: any) => {
                   //   console.log(err)
                   // } 
           
-                  // // for (let i = totalSupply+1; i <= totalSupply + listOfAddresses.length; i++) {
-                  // //   const res = await fetch(`https://metadata.sequence.app/tokens/bsc-testnet/${contractAddress}/${i}/refresh`)
-                  // //   console.log(res)
-                  // // }
-                  // //
-                  // // upload directory
-                  // const finalCID = await uploadDirectory(totalSupply, directory)
                   console.log(directory)
                 }
               }
