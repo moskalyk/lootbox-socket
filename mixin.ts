@@ -116,6 +116,82 @@ const Inference = (base: any) => {
     }
 }
 
+// ProcessInferencePool
+const ProcessInferencePool = (base: any) => {
+    base.inferencePool = {}
+    return {
+        ...base,
+        processInferencePool: async () => {
+            while (true) {
+                await base.wait(1000 * 10); // check for status every 10 seconds
+                const entries = Object.entries(base.inferencePool)
+                let urls: any = []
+                let listOfAddresses: any = []
+                let times: any = []
+                let prompts: any = []
+          
+                const promises = entries.map(([id,obj]: any) =>{
+                  if(obj.awaitingMint == false){
+                    console.log(obj.address)
+                      return base.getInferenceStatus(id, obj.address, obj.seconds, obj.prompt).then(async ({ status, url, address, seconds, prompt } : any) => {
+                        console.log(status)  
+                        if (status == 'succeeded'&& !listOfAddresses.includes(address)) {
+                              // TODO: do cleanup of this logic with objects                 
+                              prompts.push(prompt)
+                              urls.push(url)
+                              times.push(seconds)
+                              listOfAddresses.push(address)
+                          } else {
+                            console.log('status else')
+                            console.log(status)
+                          }
+                      })
+                    }
+                  }
+                );
+          
+                await Promise.all(promises)
+          
+                if(urls.length > 0){
+                  // Process URLs after all getInferenceStatus calls are done
+                  const MetadataPromises = urls.map((url: any, i: any) => base.upload(url, times[i], prompts[i]))
+                  const metadatas = await Promise.all(MetadataPromises);
+          
+                  
+                  const ids = Object.keys(base.loggedIn)
+          
+                  for(let i = 0; i < ids.length; i++){
+                    const socket = base.loggedIn[ids[i]]
+                    
+                    for(let j = 0; j < listOfAddresses.length; j++){
+                      // TODO: do more to cleanup lists
+                      // if addressess align with sockets, remove and emit
+          
+                      if(listOfAddresses[j].toLowerCase() == socket.address.toLowerCase() && socket.socket) {
+                        const index = listOfAddresses.indexOf(socket.address);
+                        if (index > -1) { // only splice array when item is found
+                          listOfAddresses.splice(index, 1) // 2nd parameter means remove one item only
+                        }
+                        const entries: any = Object.entries(base.inferencePool)
+                        const filteredEntries = entries.filter((entry: any) => !entry[1].awaitingMint);
+          
+                        for(let k = 0; k < filteredEntries.length; k++){
+                          if(filteredEntries[k][1].address.toLowerCase() == socket.address.toLowerCase()){
+                            filteredEntries[k][1].data.url = metadatas[k].image
+                            base.inferencePool[filteredEntries[k][0]].awaitingMint = true
+                            socket.socket.emit(`loot`, filteredEntries[k])
+                          }
+                        }
+                        break
+                      }
+                    }
+                  }
+                }
+            }
+        }
+    }
+} 
+
 // Upload
 import CID from 'cids'
 const pinataSDK = require('@pinata/sdk')
@@ -277,11 +353,13 @@ const SocketProcessInferencePool = (base: any) => {
                         console.log(address)
                         if (status == 'succeeded') {
                               // TODO: do cleanup of this logic with objects   
+                              console.log('added to lists')              
                               prompts.push(prompt)
                               urls.push(url)
                               times.push(seconds)
                               base.listOfAddresses.push(address)
                           } else {
+                            console.log('status else')
                             console.log(status)
                           }
                       })
@@ -295,13 +373,21 @@ const SocketProcessInferencePool = (base: any) => {
                   // Process URLs after all getInferenceStatus calls are done
                   const MetadataPromises = urls.map((url: any, i: any) => base.upload(url, times[i], prompts[i]))
                   const metadatas = await Promise.all(MetadataPromises);
+          
+                  
                   const ids = Object.keys(base.loggedIn)
           
                   for(let i = 0; i < ids.length; i++){
                     const socket = base.loggedIn[ids[i]]
                     for(let j = 0; j < base.listOfAddresses.length; j++){
                       // TODO: do more to cleanup lists
-
+                      // if addressess align with sockets, remove and emit
+                    console.log(socket.address)
+                    console.log('here')
+                    console.log(base.listOfAddresses)
+                    console.log(base.listOfAddresses[j])
+                    console.log(base.listOfAddresses[j].toLowerCase())
+                    console.log(socket.address.toLowerCase())
                       if(base.listOfAddresses[j].toLowerCase() == socket.address.toLowerCase() && socket.socket) {
                         const index = base.listOfAddresses.indexOf(socket.address);
                         if (index > -1) { // only splice array when item is found
@@ -326,9 +412,12 @@ const SocketProcessInferencePool = (base: any) => {
         },
         processMintPool: async () => {
             while (true) {
-              await base.wait(1000 * 4); // check for status every 4 seconds
+              await base.wait(1000 * 4); // check for status every 10 seconds
+          
               const mints = Object.entries(base.mintPool)
               const entries: any = Object.entries(base.inferencePool)
+              console.log(mints)
+              console.log(entries)
 
               if(mints.length > 0){
                 const directory = []
@@ -346,81 +435,99 @@ const SocketProcessInferencePool = (base: any) => {
                       console.error(`Error in fetching total supply: ${error}`);
                   }
 
-                  // Create your server EOA
+
+                  // // Create your server EOA
                   const walletEOA = new ethers.Wallet(String(process.env.PKEY), provider);
           
-                  // Open a Sequence session, this will find or create
-                  // a Sequence wallet controlled by your server EOA
+                  // // Open a Sequence session, this will find or create
+                  // // a Sequence wallet controlled by your server EOA
                   try {
+                    // Call the totalSupply function
 
-                    const session = await Session.singleSigner({
-                        signer: walletEOA,
-                        projectAccessKey: process.env.projectAccessKey!
-                    })
-            
-                    let mintTxs = []
-                    
-                    const signer = session.account.getSigner(42170)
-                    console.log(signer.account.address)
-            
-                    for (let j = 0; j < entries.length; j++){
-                      if(mints[i][0].toLowerCase() == entries[j][1].address.toLowerCase()){
-
-                        delete base.inferencePool[entries[j][0]]
-                        delete base.mintPool[entries[j][1].address.toLowerCase()]
-
-                        const metadata = {
-                          name: 'Lootbox: ' + entries[j][1].data.name,
-                          description: 'A free lootbox mini-game available for use in any game that requires collectible rewards',
-                          image: entries[j][1].data.url,
-                          attributes: entries[j][1].attributes
-                        }
-                        // add to array
-                        console.log(metadata)
-
-
-                        // create interface from partial abi
-                          const collectibleInterface = new ethers.utils.Interface([
-                              'function collect(address to)'
-                          ])
-                          
-                          // create calldata
-                          const data = collectibleInterface.encodeFunctionData(
-                              'collect', [mints[i][0]]
-                          )
-
-                        const txn = {
-                          to: contractAddress,
-                          data
-                        }
-              
-                        // Send the transaction
-                        mintTxs.push(txn)
-                        directory.push(metadata)
-                      }
-                    }
+                  const session = await Session.singleSigner({
+                      signer: walletEOA,
+                      projectAccessKey: '9q8Y4eTF3moQnahjXCDBwtZCAAAAAAAAA'
+                  })
           
-                    let txnResponse: any;
+                //   const signer = session.account.getSigner()
+                    let mintTxs = []
+                  const signer = session.account.getSigner(42170)
 
-                    directory.map(async (collectible: any, i: number) => {
-                      const jsonBuffer = Buffer.from(JSON.stringify(collectible));
-                      const params = {
-                          Bucket: 'sequence-lootbox-demo',
-                          Key: `${Number(totalSupply) + i}.json`,
-                          Body: jsonBuffer
-                      };
-                      console.log(await base.s3.upload(params).promise());
-                    })
-                    console.log(directory)
-                    try{
-                        txnResponse = await signer.sendTransaction([...mintTxs])
-                        console.log(txnResponse)
-                    }catch(err) {
-                        console.log(err)
-                    } 
-                  } catch (error) {
-                      console.error(`Error: ${error}`);
+                  console.log(signer.account.address)
+          
+                  for (let j = 0; j < entries.length; j++){
+                    console.log(entries)
+                    console.log(mints)
+                    if(mints[i][0].toLowerCase() == entries[j][1].address.toLowerCase()){
+                        console.log('minting')
+                        console.log(entries)
+                      delete base.inferencePool[entries[j][0]]
+                      console.log('mint pool')
+                      console.log(base.mintPool)
+                      console.log(base.mintPool[entries[j][1].address.toLowerCase()])
+                      console.log(entries[j][1].address.toLowerCase())
+                      delete base.mintPool[entries[j][1].address.toLowerCase()]
+
+                      const metadata = {
+                        name: 'Lootbox: ' + entries[j][1].data.name,
+                        description: 'A free lootbox mini-game available for use in any game that requires collectible rewards',
+                        image: entries[j][1].data.url,
+                        attributes: entries[j][1].attributes
+                      }
+                      // add to array
+                      console.log(metadata)
+
+
+                      // create interface from partial abi
+                        const collectibleInterface = new ethers.utils.Interface([
+                            'function collect(address to)'
+                        ])
+                        
+                        // create calldata
+                        const data = collectibleInterface.encodeFunctionData(
+                            'collect', [mints[i][0]]
+                        )
+
+                      const txn = {
+                        to: contractAddress,
+                        data
+                      }
+            
+                      // Send the transaction
+                      mintTxs.push(txn)
+                      directory.push(metadata)
+                    }
                   }
+          
+                  
+          
+                //   console.log(signer.account.address)
+          
+                  let txnResponse: any;
+
+
+                  directory.map(async (collectible: any, i: number) => {
+                    const jsonBuffer = Buffer.from(JSON.stringify(collectible));
+                    const params = {
+                        Bucket: 'sequence-lootbox-demo',
+                        Key: `${Number(totalSupply) + i}.json`,
+                        Body: jsonBuffer
+                    };
+
+                    console.log(await base.s3.upload(params).promise());
+                })
+
+                    console.log(directory)
+
+                        try{
+                            txnResponse = await signer.sendTransaction([...mintTxs])
+                            console.log(txnResponse)
+                        }catch(err) {
+                            console.log(err)
+                        } 
+                    } catch (error) {
+                        console.error(`Error: ${error}`);
+                    }
                 }
               }
             }
@@ -428,13 +535,16 @@ const SocketProcessInferencePool = (base: any) => {
         initETHAuthProof: () => {
             base.io.use(async (socket: any, next: any) => {
                 const token = socket.handshake.query.token as string
+                console.log(token)
                 // const address = socket.handshake.query.address as string;
+                await base.ethauth.configJsonRpcProvider(rpcUrl)
                 try {
-                    await base.ethauth.configJsonRpcProvider(rpcUrl)
                     const proof = await base.ethauth.decodeProof(token)
                     // only allow for 1 socket
                     const sockets: any = Object.entries(base.loggedIn)
                     for(let i = 0; i < sockets.length; i++){
+                      console.log(sockets[i])
+                      // }
                       if(sockets[i][1].hasOwnProperty('address') && sockets[i][1].address == proof.address){
                         next(new Error('Duplicate Socket'))
                       } 
@@ -484,13 +594,12 @@ const SocketProcessInferencePool = (base: any) => {
                       socket.on('collect', async (data: any) => {
               
                           console.log('Received response:', data);
-
                           const res = await axios('http://127.0.0.1:5000')
                           console.log(res.data)
               
-                          const attributes = []
+                        const attributes = []
               
-                          const defend = Math.random() > 0.5 ? true : false
+                        const defend = Math.random() > 0.5 ? true : false
               
                           // category
                           attributes.push({
@@ -524,7 +633,11 @@ const SocketProcessInferencePool = (base: any) => {
                           })
               
                           console.log(attributes)
-                          const { inferenceId, seconds, prompt }: any = await base.getInferenceWithItem(res.data[defend ? 'armor' : 'weapon'].name + "with the aesethic" + res.data[defend ? 'armor' : 'weapon'].category)            
+                          console.log(data.address)
+                          console.log('address')
+                          console.log(data.proof.proofString.split('.')[1])
+                          const { inferenceId, seconds, prompt }: any = await base.getInferenceWithItem(res.data[defend ? 'armor' : 'weapon'].name + "with the aesethic" + res.data[defend ? 'armor' : 'weapon'].category)
+              
                           base.inferencePool[inferenceId] = {address: data.proof.proofString.split('.')[1], seconds: base.getCurrentSecond(), prompt: res.data[defend ? 'armor' : 'weapon'].name, data: res.data[defend ? 'armor' : 'weapon'], attributes: attributes, awaitingMint: false }
                       })
                   } 
@@ -541,8 +654,9 @@ const SocketProcessInferencePool = (base: any) => {
                     Time(
                         Strings(
                             Upload(
-                                Stream(
-                                      {}
+                                Stream({
+                                        //  ★
+                                    }
                                 )
                             )
                         )
